@@ -1,0 +1,213 @@
+
+--Skills used in this project: CTE, inner join, case when, column creation (alter table, add, update/set), variables (declare),
+--select into, substring, charindex, left, count, len, lower, convert, isnumeric, replace, view creation
+
+--Goal: clean the data so only relevant data remain in the dataset, allowing an accurate future analysis
+
+--checking the general view of the table (should be the 1st query for every new table)
+
+	select *
+	from Audible_Raw_Data
+
+	select top 10*
+	from Audible_Raw_Data
+
+		/*
+		Main facts found (not exhaustive):
+			- 87.489 lines
+			- some lines with special characters
+			- mix of uppercase and lowercase in the same column
+			- repetitive classification for columns 'author' and 'narrator'
+			- data type with innacuracy ('releasedate' and 'price' as varchar and not as a date type and a numeric or money type)
+			- mixed and not standard information in the same column ('stars')
+		*/
+
+--create a new table to manipulate all changes (with the creation of a sequential ID), while keeping the raw one untouched
+
+	select 
+			identity(int,1,1) as ID,
+			* 
+	into Audible_Data_Cleaning 
+	from Audible_Raw_Data
+	
+
+			--from now on using the newly created table (Audible_Data_Cleaning)
+
+
+--adjusting data format 
+	
+	--checking for different years
+	select distinct substring (releasedate, 7, 2)
+	from Audible_Data_Cleaning
+	order by 1
+
+	--creating a new column to insert dates using the correct Date Format
+	--option 1, without CTE:
+	alter table Audible_Data_Cleaning
+	add releasedate_update date 
+	
+	update Audible_Data_Cleaning
+	set releasedate_update = convert(date, case
+                      						when substring(releasedate, 7, 2) in ('98', '99')
+                      						then '19' + substring(releasedate, 7, 2) + substring(releasedate, 4, 2) + substring(releasedate, 1, 2)
+                      						else '20' + substring(releasedate, 7, 2) + substring(releasedate, 4, 2) + substring(releasedate, 1, 2)
+                      	                end)
+
+	--option 2, with CTE:
+	with temp_date (id, complete_date)
+	as
+	(
+	select id,
+			case
+			when substring(releasedate, 7, 2) in ('98', '99')
+			then '19' + substring(releasedate, 7, 2) + substring(releasedate, 4, 2) + substring(releasedate, 1, 2)
+			else '20' + substring(releasedate, 7, 2) + substring(releasedate, 4, 2) + substring(releasedate, 1, 2)
+			end as complete_date
+		from audible_data_cleaning
+	)
+
+	update a
+		set a.releasedate_update = b.complete_date
+		from audible_data_cleaning as a
+		inner join temp_date as b
+			on (a.id = b.id)
+
+--fixing the author column (checking that all lines had 'Writtenby:' and creating a new clean column)
+	
+				--3 quick checks for the 'Writtenby:' position and checking if it appears in different ways
+				select 
+					author,
+					charindex('Writtenby:', author) as author_cleaned
+				from Audible_Data_Cleaning
+				where charindex('Writtenby:', author) > 1
+				-----------------
+				select 
+					author,
+					left (author, 10) as author_cleaned
+				from Audible_Data_Cleaning
+				where left (author, 10) <> 'Writtenby:'
+				-----------------
+				select distinct left (author, 10) as author_cleaned
+				from Audible_Data_Cleaning
+
+	select
+		author,
+		substring(author, 11, len(author))
+	from Audible_Data_Cleaning
+
+	alter table Audible_Data_Cleaning
+	add author_update varchar(200)
+
+	update Audible_Data_Cleaning 
+	set author_update = substring(author, 11, len(author))
+						
+
+--fixing the narrator column (checking that all lines had 'Narratedby:' and creating a new clean column)
+
+				--3 quick checks for the 'Writtenby:' position and checking if it appears in different ways
+				select 
+					narrator,
+					charindex('Narratedby:', narrator) as narrator_cleaned
+				from Audible_Data_Cleaning
+				where charindex('Narratedby:', narrator) > 1
+				-----------------
+				select 
+					narrator,
+					left (narrator, 11) as narrator_cleaned
+				from Audible_Data_Cleaning
+				where left (narrator, 11) <> 'Narratedby:'
+				-----------------
+				select distinct left (narrator, 11) as narrator_cleaned
+				from Audible_Data_Cleaning
+
+	select
+		narrator,
+		substring(narrator, 12, len(author))
+	from Audible_Data_Cleaning
+
+	alter table Audible_Data_Cleaning
+	add narrator_update varchar(200)
+
+	update Audible_Data_Cleaning 
+	set narrator_update = substring(narrator, 12, len(narrator))
+
+--checking for the different languages (36 were found) and putting them into a single standard (all lower case)
+	
+	select 
+		language,
+		count(language) as language_check
+	from Audible_Data_Cleaning
+	group by language 
+	order by 2 desc 
+
+	update Audible_Data_Cleaning
+	set language = lower(language)
+
+--converting price from INR(indian rupee) to USD 
+
+	alter table Audible_Data_Cleaning
+	add price_USD money 
+
+	select price, convert(float, price)
+	from Audible_Data_Cleaning
+						--'Free' came up so the steps below addresed that
+
+	select *
+	from Audible_Data_Cleaning
+	where isnumeric(price) = 0 
+
+	declare @exchange_rate money = 0.012 
+	
+	update Audible_Data_Cleaning
+	set price_usd = round((replace(price, 'Free','0') * @exchange_rate),2) 
+
+
+--splitting stars and ratings
+
+	select 
+		stars,
+		count (stars) count_per_type
+	from Audible_Data_Cleaning
+	group by stars 
+	order by count (stars) desc
+
+	select 
+		stars,
+		charindex('stars',stars) as position,
+		substring(stars, charindex('stars',stars) + 5, len(stars)) as ratings,
+		replace(stars, (substring(stars, charindex('stars',stars) + 5, len(stars))),'') as stars_update
+	from Audible_Data_Cleaning
+
+	alter table	Audible_Data_Cleaning
+	add ratings varchar(50)
+
+	alter table	Audible_Data_Cleaning
+	add stars_updated varchar(50)
+
+	update Audible_Data_Cleaning
+	set stars_updated = CASE WHEN stars <> 'Not rated yet' 
+								then replace(stars, (substring(stars, charindex('stars',stars) + 5, len(stars))),'')
+							ELSE stars
+							END,
+		 ratings =			CASE WHEN stars <> 'Not rated yet' 
+								then substring(stars, charindex('stars',stars) + 5, len(stars))
+							ELSE stars
+							END 
+
+--create final view
+
+	select *
+	from Audible_Data_Cleaning
+
+	create view Final_Clean_Table
+	as
+	select
+		author_update,
+		narrator_update,
+		language,
+		time,
+		releasedate_update,
+		stars_updated,
+		ratings,
+		price_USD 
+	from Audible_Data_Cleaning
